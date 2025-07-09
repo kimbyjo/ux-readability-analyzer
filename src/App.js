@@ -3,14 +3,18 @@ import { Upload, FileText, AlertCircle, CheckCircle, Download, X, Eye } from 'lu
 
 // Configuration - Azure credentials
 const getConfig = () => {
-  // For development/testing, you can hardcode values here temporarily
+  // TEMPORARY: Hardcode your values here for testing
+  // Replace these with your actual Azure credentials
+  const hardcodedEndpoint = 'https://ux-readability-vision.cognitiveservices.azure.com/';
+  const hardcodedKey = '5fCFksPQiwUV9ZdYlgiPptlnMp1zkY0EROxXtq3DqMc5x3zsdG6AJQQJ99BGACYeBjFXJ3w3AAAFACOGHmKa';
+  
   return {
     azureEndpoint: window.REACT_APP_AZURE_VISION_ENDPOINT || 
                   (typeof process !== 'undefined' ? process.env?.REACT_APP_AZURE_VISION_ENDPOINT : null) ||
-                  '', // Add your endpoint here for testing: 'https://your-service.cognitiveservices.azure.com/'
+                  hardcodedEndpoint, // Remove this line after env vars work
     azureKey: window.REACT_APP_AZURE_VISION_KEY || 
              (typeof process !== 'undefined' ? process.env?.REACT_APP_AZURE_VISION_KEY : null) ||
-             '' // Add your key here for testing: 'your-api-key-here'
+             hardcodedKey // Remove this line after env vars work
   };
 };
 
