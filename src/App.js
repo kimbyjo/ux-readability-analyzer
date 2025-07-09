@@ -3,18 +3,13 @@ import { Upload, FileText, AlertCircle, CheckCircle, Download, X, Eye } from 'lu
 
 // Configuration - Azure credentials
 const getConfig = () => {
-  // TEMPORARY: Hardcode your values here for testing
-  // Replace these with your actual Azure credentials
-  const hardcodedEndpoint = 'https://ux-readability-vision.cognitiveservices.azure.com/';
-  const hardcodedKey = '5fCFksPQiwUV9ZdYlgiPptlnMp1zkY0EROxXtq3DqMc5x3zsdG6AJQQJ99BGACYeBjFXJ3w3AAAFACOGHmKa';
-  
   return {
     azureEndpoint: window.REACT_APP_AZURE_VISION_ENDPOINT || 
                   (typeof process !== 'undefined' ? process.env?.REACT_APP_AZURE_VISION_ENDPOINT : null) ||
-                  hardcodedEndpoint, // Remove this line after env vars work
+                  '', // Environment variables should be set in Azure Portal
     azureKey: window.REACT_APP_AZURE_VISION_KEY || 
              (typeof process !== 'undefined' ? process.env?.REACT_APP_AZURE_VISION_KEY : null) ||
-             hardcodedKey // Remove this line after env vars work
+             '' // Environment variables should be set in Azure Portal
   };
 };
 
@@ -141,21 +136,48 @@ const extractTextFromImageAzure = async (file, onProgress = null) => {
         result.analyzeResult.readResults.forEach(page => {
           if (page.lines) {
             page.lines.forEach(line => {
-              extractedText += line.text + ' ';
+              // Add each line as a separate line, preserving structure
+              const lineText = line.text.trim();
+              if (lineText) {
+                // Check if line ends with punctuation
+                const endsWithPunctuation = /[.!?:;]$/.test(lineText);
+                
+                // Add the line text
+                extractedText += lineText;
+                
+                // Add appropriate spacing based on content
+                if (endsWithPunctuation) {
+                  extractedText += ' '; // Space after sentences
+                } else {
+                  // If no punctuation, check if it looks like a heading or short phrase
+                  if (lineText.length < 50 && !lineText.includes(' ')) {
+                    extractedText += '. '; // Add period for headings/labels
+                  } else {
+                    extractedText += ' '; // Just space for continued text
+                  }
+                }
+              }
             });
           }
         });
       }
 
       const finalText = extractedText.trim();
-      console.log('OCR Success! Extracted text length:', finalText.length);
-      console.log('First 100 characters:', finalText.substring(0, 100));
       
-      if (!finalText) {
+      // Clean up any double spaces and normalize punctuation
+      const cleanedText = finalText
+        .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+        .replace(/\s+([.!?:;,])/g, '$1') // Remove spaces before punctuation
+        .replace(/([.!?])\s*([A-Z])/g, '$1 $2'); // Ensure proper spacing after sentences
+      
+      console.log('OCR Success! Extracted text length:', cleanedText.length);
+      console.log('First 200 characters:', cleanedText.substring(0, 200));
+      
+      if (!cleanedText) {
         throw new Error('No text detected in the image. Please ensure the image contains readable text.');
       }
       
-      return finalText;
+      return cleanedText;
     } else if (result.status === 'failed') {
       console.error('OCR processing failed:', result);
       throw new Error('Azure OCR processing failed');
@@ -182,7 +204,12 @@ const extractTextFromImageAzure = async (file, onProgress = null) => {
 
 // Flesch-Kincaid Grade Level calculator
 const calculateFleschKincaid = (text) => {
-  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  // Better sentence splitting that handles UI text
+  const sentences = text
+    .split(/[.!?]+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0 && s.split(/\s+/).length >= 2); // Only count sentences with 2+ words
+  
   const words = text.split(/\s+/).filter(w => w.length > 0);
   const syllables = words.reduce((count, word) => {
     return count + countSyllables(word);
@@ -234,9 +261,13 @@ const detectPassiveVoice = (text) => {
 
 // Detect long sentences (>20 words)
 const detectLongSentences = (text) => {
-  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  const sentences = text
+    .split(/[.!?]+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+  
   return sentences.filter(sentence => {
-    const words = sentence.trim().split(/\s+/);
+    const words = sentence.trim().split(/\s+/).filter(w => w.length > 0);
     return words.length > 20;
   });
 };
