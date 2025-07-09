@@ -9,22 +9,138 @@ const JARGON_WORDS = [
   'state-of-the-art', 'turnkey', 'mission-critical', 'value-add', 'game-changer'
 ];
 
-// Mock OCR function - in production, use tesseract.js or external API
-const mockOCR = async (file) => {
-  // Simulate OCR processing delay
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
-  // Mock comprehensive extracted text based on filename or random selection
-  const mockTexts = [
-    "Welcome to our app! Please enter your email address to get started. We'll send you a verification link to confirm your account. By continuing, you agree to our Terms of Service and Privacy Policy. Need help? Contact our support team at support@example.com or call 1-800-HELP-NOW.",
-    "Your password must be at least 8 characters long and include one uppercase letter, one number, and one special character. Password strength: Weak. Consider using a passphrase instead of a single word. Tips: Use a mix of letters, numbers, and symbols. Avoid personal information like birthdays or names. Enable two-factor authentication for extra security.",
-    "We leverage cutting-edge technology to facilitate seamless user experiences across all touchpoints. Click here to optimize your workflow and streamline your processes. Our robust platform utilizes advanced algorithms to deliver actionable insights. Experience the paradigm shift in productivity with our state-of-the-art solutions.",
-    "Thank you for your submission. We will process your request and get back to you within 24 hours during business days. Reference ID: REF-2024-001. Track your request status in the dashboard. Questions? Check our FAQ or contact customer service. Emergency support available 24/7 for premium users.",
-    "Error: Unable to connect to server. Please check your internet connection and try again. If the problem persists, contact technical support. Error code: 500. Troubleshooting steps: 1. Refresh the page 2. Clear browser cache 3. Check firewall settings 4. Try a different browser. System status: Some services may be experiencing intermittent issues.",
-    "Congratulations! Your account has been successfully created. You can now access all premium features including advanced analytics, priority support, and exclusive content. Get started by completing your profile setup. Explore our tutorial videos and documentation. Invite team members to collaborate on projects. Upgrade available for additional storage and features."
-  ];
-  
-  return mockTexts[Math.floor(Math.random() * mockTexts.length)];
+// Azure OCR integration - Replace mock with real OCR
+const extractTextFromImageAzure = async (file, onProgress = null) => {
+  const AZURE_ENDPOINT = process.env.REACT_APP_AZURE_VISION_ENDPOINT;
+  const AZURE_KEY = process.env.REACT_APP_AZURE_VISION_KEY;
+
+  try {
+    // Check if Azure credentials are configured
+    if (!AZURE_ENDPOINT || !AZURE_KEY) {
+      console.error('Azure credentials missing:', { 
+        hasEndpoint: !!AZURE_ENDPOINT, 
+        hasKey: !!AZURE_KEY 
+      });
+      throw new Error('Azure Computer Vision credentials not configured. Please check your environment variables.');
+    }
+
+    if (onProgress) onProgress(10);
+
+    // Step 1: Submit image for analysis using Read API
+    const analyzeResponse = await fetch(`${AZURE_ENDPOINT}/vision/v3.2/read/analyze`, {
+      method: 'POST',
+      headers: {
+        'Ocp-Apim-Subscription-Key': AZURE_KEY,
+        'Content-Type': 'application/octet-stream'
+      },
+      body: file
+    });
+
+    if (!analyzeResponse.ok) {
+      const errorText = await analyzeResponse.text();
+      console.error('Azure API Error:', {
+        status: analyzeResponse.status,
+        statusText: analyzeResponse.statusText,
+        error: errorText
+      });
+      
+      if (analyzeResponse.status === 401) {
+        throw new Error('Invalid Azure API key. Please check your REACT_APP_AZURE_VISION_KEY.');
+      } else if (analyzeResponse.status === 403) {
+        throw new Error('Azure API access denied. Check your subscription and quota.');
+      } else if (analyzeResponse.status === 400) {
+        throw new Error('Invalid image format. Please use PNG, JPEG, BMP, or TIFF.');
+      } else {
+        throw new Error(`Azure API error: ${analyzeResponse.status} - ${errorText}`);
+      }
+    }
+
+    if (onProgress) onProgress(30);
+
+    // Step 2: Get operation location from response headers
+    const operationLocation = analyzeResponse.headers.get('operation-location');
+    if (!operationLocation) {
+      throw new Error('No operation location received from Azure API');
+    }
+
+    const operationId = operationLocation.split('/').pop();
+    console.log('OCR operation started:', operationId);
+
+    // Step 3: Poll for results
+    let result;
+    let attempts = 0;
+    const maxAttempts = 30; // 30 seconds max wait
+
+    do {
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+      
+      const resultResponse = await fetch(
+        `${AZURE_ENDPOINT}/vision/v3.2/read/analyzeResults/${operationId}`,
+        {
+          headers: {
+            'Ocp-Apim-Subscription-Key': AZURE_KEY
+          }
+        }
+      );
+
+      if (!resultResponse.ok) {
+        throw new Error(`Failed to get OCR results: ${resultResponse.status}`);
+      }
+
+      result = await resultResponse.json();
+      attempts++;
+
+      console.log(`OCR attempt ${attempts}, status: ${result.status}`);
+
+      if (onProgress) {
+        onProgress(30 + (attempts / maxAttempts) * 60);
+      }
+    } while (result.status === 'running' && attempts < maxAttempts);
+
+    if (onProgress) onProgress(100);
+
+    // Step 4: Process results
+    if (result.status === 'succeeded') {
+      let extractedText = '';
+      
+      if (result.analyzeResult && result.analyzeResult.readResults) {
+        result.analyzeResult.readResults.forEach(page => {
+          if (page.lines) {
+            page.lines.forEach(line => {
+              extractedText += line.text + ' ';
+            });
+          }
+        });
+      }
+
+      const finalText = extractedText.trim();
+      console.log('OCR Success! Extracted text length:', finalText.length);
+      
+      if (!finalText) {
+        throw new Error('No text detected in the image. Please ensure the image contains readable text.');
+      }
+      
+      return finalText;
+    } else if (result.status === 'failed') {
+      throw new Error('Azure OCR processing failed');
+    } else {
+      throw new Error('Azure OCR processing timed out');
+    }
+
+  } catch (error) {
+    console.error('Azure OCR Error:', error);
+    
+    // Provide fallback to mock data for testing
+    console.warn('Falling back to mock OCR data due to error:', error.message);
+    
+    const mockTexts = [
+      "Welcome to our app! Please enter your email address to get started. We'll send you a verification link.",
+      "Your password must be at least 8 characters long and include one uppercase letter, one number, and one special character.",
+      "Error: Unable to connect to server. Please check your internet connection and try again."
+    ];
+    
+    return mockTexts[Math.floor(Math.random() * mockTexts.length)] + " [MOCK DATA - Check console for OCR errors]";
+  }
 };
 
 // Flesch-Kincaid Grade Level calculator
@@ -473,26 +589,63 @@ const App = () => {
     }
 
     setIsProcessing(true);
+    
     const filePromises = newFiles.map(async (file) => {
       const preview = URL.createObjectURL(file);
-      const extractedText = await mockOCR(file);
-      const analysis = analyzeText(extractedText);
       
-      return {
-        file,
-        filename: file.name,
-        preview,
-        extractedText,
-        analysis
-      };
+      try {
+        console.log('Processing file:', file.name, 'Size:', file.size, 'Type:', file.type);
+        
+        // Use Azure OCR instead of mock
+        const extractedText = await extractTextFromImageAzure(file, (progress) => {
+          console.log(`OCR Progress for ${file.name}: ${progress}%`);
+        });
+        
+        console.log('Extracted text for', file.name, ':', extractedText.substring(0, 100) + '...');
+        
+        const analysis = analyzeText(extractedText);
+        
+        return {
+          file,
+          filename: file.name,
+          preview,
+          extractedText,
+          analysis
+        };
+      } catch (error) {
+        console.error('Error processing file:', file.name, error);
+        
+        // Show user-friendly error message
+        alert(`Error processing ${file.name}: ${error.message}`);
+        
+        // Return null for failed files
+        return null;
+      }
     });
 
     try {
       const newResults = await Promise.all(filePromises);
-      setFiles(prev => [...prev, ...newFiles]);
-      setResults(prev => [...prev, ...newResults]);
+      
+      // Filter out failed files (null results)
+      const successfulResults = newResults.filter(result => result !== null);
+      
+      if (successfulResults.length === 0) {
+        alert('No files could be processed successfully. Please check your Azure configuration and try again.');
+        return;
+      }
+      
+      if (successfulResults.length < newFiles.length) {
+        alert(`${newFiles.length - successfulResults.length} file(s) failed to process. Check console for details.`);
+      }
+      
+      setFiles(prev => [...prev, ...newFiles.slice(0, successfulResults.length)]);
+      setResults(prev => [...prev, ...successfulResults]);
+      
+      console.log('Successfully processed', successfulResults.length, 'files');
+      
     } catch (error) {
       console.error('Error processing files:', error);
+      alert('Error processing files. Please check console for details.');
     } finally {
       setIsProcessing(false);
     }
