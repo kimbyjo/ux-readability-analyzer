@@ -1,6 +1,19 @@
 import React, { useState, useCallback } from 'react';
 import { Upload, FileText, AlertCircle, CheckCircle, Download, X, Eye } from 'lucide-react';
 
+// Configuration - Azure credentials
+const getConfig = () => {
+  // For development/testing, you can hardcode values here temporarily
+  return {
+    azureEndpoint: window.REACT_APP_AZURE_VISION_ENDPOINT || 
+                  (typeof process !== 'undefined' ? process.env?.REACT_APP_AZURE_VISION_ENDPOINT : null) ||
+                  '', // Add your endpoint here for testing: 'https://your-service.cognitiveservices.azure.com/'
+    azureKey: window.REACT_APP_AZURE_VISION_KEY || 
+             (typeof process !== 'undefined' ? process.env?.REACT_APP_AZURE_VISION_KEY : null) ||
+             '' // Add your key here for testing: 'your-api-key-here'
+  };
+};
+
 // Jargon dictionary for detection
 const JARGON_WORDS = [
   'leverage', 'robust', 'utilize', 'synergy', 'paradigm', 'optimize', 'streamline',
@@ -11,23 +24,33 @@ const JARGON_WORDS = [
 
 // Azure OCR integration - Replace mock with real OCR
 const extractTextFromImageAzure = async (file, onProgress = null) => {
-  const AZURE_ENDPOINT = process.env.REACT_APP_AZURE_VISION_ENDPOINT;
-  const AZURE_KEY = process.env.REACT_APP_AZURE_VISION_KEY;
+  const config = getConfig();
+  const AZURE_ENDPOINT = config.azureEndpoint;
+  const AZURE_KEY = config.azureKey;
 
   try {
     // Check if Azure credentials are configured
     if (!AZURE_ENDPOINT || !AZURE_KEY) {
       console.error('Azure credentials missing:', { 
         hasEndpoint: !!AZURE_ENDPOINT, 
-        hasKey: !!AZURE_KEY 
+        hasKey: !!AZURE_KEY,
+        endpoint: AZURE_ENDPOINT,
+        keyLength: AZURE_KEY?.length
       });
       throw new Error('Azure Computer Vision credentials not configured. Please check your environment variables.');
     }
 
+    // Ensure endpoint ends with /
+    const cleanEndpoint = AZURE_ENDPOINT.endsWith('/') ? AZURE_ENDPOINT : AZURE_ENDPOINT + '/';
+    console.log('Using endpoint:', cleanEndpoint);
+
     if (onProgress) onProgress(10);
 
     // Step 1: Submit image for analysis using Read API
-    const analyzeResponse = await fetch(`${AZURE_ENDPOINT}/vision/v3.2/read/analyze`, {
+    const analyzeUrl = `${cleanEndpoint}vision/v3.2/read/analyze`;
+    console.log('Making request to:', analyzeUrl);
+
+    const analyzeResponse = await fetch(analyzeUrl, {
       method: 'POST',
       headers: {
         'Ocp-Apim-Subscription-Key': AZURE_KEY,
@@ -36,20 +59,26 @@ const extractTextFromImageAzure = async (file, onProgress = null) => {
       body: file
     });
 
+    console.log('Response status:', analyzeResponse.status);
+    console.log('Response headers:', Object.fromEntries(analyzeResponse.headers.entries()));
+
     if (!analyzeResponse.ok) {
       const errorText = await analyzeResponse.text();
-      console.error('Azure API Error:', {
+      console.error('Azure API Error Details:', {
         status: analyzeResponse.status,
         statusText: analyzeResponse.statusText,
-        error: errorText
+        error: errorText,
+        url: analyzeUrl
       });
       
       if (analyzeResponse.status === 401) {
-        throw new Error('Invalid Azure API key. Please check your REACT_APP_AZURE_VISION_KEY.');
+        throw new Error('Invalid Azure API key. Please check your REACT_APP_AZURE_VISION_KEY in Azure Static Web App Configuration.');
       } else if (analyzeResponse.status === 403) {
         throw new Error('Azure API access denied. Check your subscription and quota.');
       } else if (analyzeResponse.status === 400) {
         throw new Error('Invalid image format. Please use PNG, JPEG, BMP, or TIFF.');
+      } else if (analyzeResponse.status === 0) {
+        throw new Error('CORS error: Cannot connect to Azure API. This might be a browser security issue.');
       } else {
         throw new Error(`Azure API error: ${analyzeResponse.status} - ${errorText}`);
       }
@@ -60,6 +89,7 @@ const extractTextFromImageAzure = async (file, onProgress = null) => {
     // Step 2: Get operation location from response headers
     const operationLocation = analyzeResponse.headers.get('operation-location');
     if (!operationLocation) {
+      console.error('No operation-location header found');
       throw new Error('No operation location received from Azure API');
     }
 
@@ -74,16 +104,16 @@ const extractTextFromImageAzure = async (file, onProgress = null) => {
     do {
       await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
       
-      const resultResponse = await fetch(
-        `${AZURE_ENDPOINT}/vision/v3.2/read/analyzeResults/${operationId}`,
-        {
-          headers: {
-            'Ocp-Apim-Subscription-Key': AZURE_KEY
-          }
+      const resultUrl = `${cleanEndpoint}vision/v3.2/read/analyzeResults/${operationId}`;
+      const resultResponse = await fetch(resultUrl, {
+        headers: {
+          'Ocp-Apim-Subscription-Key': AZURE_KEY
         }
-      );
+      });
 
       if (!resultResponse.ok) {
+        const errorText = await resultResponse.text();
+        console.error('Error getting results:', resultResponse.status, errorText);
         throw new Error(`Failed to get OCR results: ${resultResponse.status}`);
       }
 
@@ -115,6 +145,7 @@ const extractTextFromImageAzure = async (file, onProgress = null) => {
 
       const finalText = extractedText.trim();
       console.log('OCR Success! Extracted text length:', finalText.length);
+      console.log('First 100 characters:', finalText.substring(0, 100));
       
       if (!finalText) {
         throw new Error('No text detected in the image. Please ensure the image contains readable text.');
@@ -122,13 +153,15 @@ const extractTextFromImageAzure = async (file, onProgress = null) => {
       
       return finalText;
     } else if (result.status === 'failed') {
+      console.error('OCR processing failed:', result);
       throw new Error('Azure OCR processing failed');
     } else {
+      console.error('OCR processing timed out:', result);
       throw new Error('Azure OCR processing timed out');
     }
 
   } catch (error) {
-    console.error('Azure OCR Error:', error);
+    console.error('Azure OCR Error Details:', error);
     
     // Provide fallback to mock data for testing
     console.warn('Falling back to mock OCR data due to error:', error.message);
@@ -696,6 +729,31 @@ const App = () => {
           <p className="text-gray-600">
             Upload screenshots to analyze the readability of your user flow
           </p>
+          
+          {/* Debug Panel - Remove after fixing */}
+          <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+            <h3 className="font-semibold text-yellow-800">Debug Info:</h3>
+            <div className="text-sm text-yellow-700 space-y-1">
+              <p>Endpoint: {getConfig().azureEndpoint ? '✅ Set' : '❌ Missing'}</p>
+              <p>API Key: {getConfig().azureKey ? '✅ Set' : '❌ Missing'}</p>
+              <p>Endpoint Value: {getConfig().azureEndpoint || 'Not set'}</p>
+              <button 
+                onClick={() => {
+                  const config = getConfig();
+                  console.log('Configuration Check:', {
+                    endpoint: config.azureEndpoint,
+                    hasKey: !!config.azureKey,
+                    keyLength: config.azureKey?.length,
+                    processAvailable: typeof process !== 'undefined',
+                    windowVars: Object.keys(window).filter(key => key.startsWith('REACT_APP_'))
+                  });
+                }}
+                className="mt-2 px-3 py-1 bg-yellow-600 text-white rounded text-sm hover:bg-yellow-700"
+              >
+                Log Configuration to Console
+              </button>
+            </div>
+          </div>
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
